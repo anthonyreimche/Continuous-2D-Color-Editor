@@ -14,6 +14,7 @@
 
 const STAGE_ID = "color2d-editor.color";
 const PANEL_ID = "color2d-editor.panel";
+const SLOT_ID = "color2d-editor.picker-overlay";
 const MAX_POINTS = 8;
 const TWO_PI = Math.PI * 2;
 
@@ -182,28 +183,63 @@ function hsvToRgb(h, s, v) {
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }
 
+// `size` is the canvas's device-pixel backing-store size (CSS size × dpr), so the
+// wheel stays crisp on HiDPI. The rim alpha feathers over ~1.5px centred on the
+// edge, so the circle reads as smooth/round instead of a jagged pixel staircase.
 function drawWheel(canvas, size) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const img = ctx.createImageData(size, size);
   const d = img.data;
   const r0 = size / 2;
+  const aa = 1.5 / r0; // anti-aliased rim width, in normalised-radius units
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const dx = (x - r0) / r0;
-      const dy = (y - r0) / r0;
+      const dx = (x - r0 + 0.5) / r0;
+      const dy = (y - r0 + 0.5) / r0;
       const rad = Math.hypot(dx, dy);
       const idx = (y * size + x) * 4;
-      if (rad > 1) { d[idx + 3] = 0; continue; }
+      if (rad > 1 + aa) { d[idx + 3] = 0; continue; }
       let ang = Math.atan2(-dy, dx);
       if (ang < 0) ang += TWO_PI;
       const [rr, gg, bb] = hsvToRgb(ang / TWO_PI, Math.min(rad, 1), 1);
-      // Slight inner fade so the desaturated centre reads as "no selection".
+      const alpha = Math.min(1, Math.max(0, (1 + aa - rad) / (2 * aa)));
       d[idx] = rr; d[idx + 1] = gg; d[idx + 2] = bb;
-      d[idx + 3] = 255;
+      d[idx + 3] = Math.round(alpha * 255);
     }
   }
   ctx.putImageData(img, 0, 0);
+}
+
+// sRGB (0..1) -> HSL. Matches the shader's rgb2hsl so a colour picked off the
+// image lands at the same wheel position the stage selects.
+function rgb2hsl(r, g, b) {
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (mx + mn) / 2;
+  const d = mx - mn;
+  if (d > 1e-5) {
+    s = l < 0.5 ? d / (mx + mn) : d / (2 - mx - mn);
+    if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+  }
+  return [h, s, l];
+}
+
+// Minimal shared store so the panel's Pick button and the canvas overlay agree on
+// picker mode + the selected point (React is external; no zustand to import).
+function makeStore(initial) {
+  let state = initial;
+  const subs = new Set();
+  return {
+    get: () => state,
+    set: (patch) => { state = { ...state, ...patch }; subs.forEach((f) => f()); },
+    subscribe: (f) => { subs.add(f); return () => subs.delete(f); },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -316,19 +352,122 @@ export function activate(api) {
     void useDevelopStore.getState().commitEdit("Reset Color Editor");
   }
 
+  // ---- shared UI state (picker mode + selected point) ----
+  const ui = makeStore({ picking: false, selected: -1 });
+  function usePicker() {
+    const [, bump] = React.useState(0);
+    React.useEffect(() => ui.subscribe(() => bump((n) => n + 1)), []);
+    return ui.get();
+  }
+
+  // Drop a point at a chromaticity-disc position (hue turns, saturation), adopting
+  // the user's default selection style. Commits immediately (one undo step) and
+  // selects it. When all slots are full, retarget the selected point instead.
+  function addPointAt(hue, sat) {
+    const bag = useDevelopStore.getState().paramBag;
+    const range = (api.settings.get("defaultRange", DEFAULT_RANGE) / 100) * 1.5;
+    const soft = api.settings.get("defaultSmooth", DEFAULT_SMOOTH) / 100;
+    let free = -1;
+    for (let i = 0; i < MAX_POINTS; i++) if (readB(bag, i)[3] < 0.5) { free = i; break; }
+    if (free >= 0) {
+      writeSlots({ [KA(free)]: [hue, sat, range, soft], [KB(free)]: [0, 0, 0, 1] });
+      commit();
+      ui.set({ selected: free });
+      return;
+    }
+    const selPrev = ui.get().selected;
+    if (selPrev >= 0 && readB(bag, selPrev)[3] >= 0.5) {
+      const a = readA(bag, selPrev);
+      writeSlots({ [KA(selPrev)]: [hue, sat, a[2], a[3]] });
+      commit();
+    }
+  }
+
+  // Sample the displayed colour under a canvas point and add a selection point.
+  // The captured frame is aligned 1:1 with the displayed canvas, so the click is
+  // mapped through the overlay's `rect` (where the displayed pixels sit). clientWidth
+  // vs getBoundingClientRect width yields the interface-scale factor, so the map
+  // holds under Windows DPI + interface zoom (see pointer-coords memory).
+  async function sampleColorAt(clientX, clientY, el, ovr) {
+    // Whole body guarded: a sampling failure (no overlay rect, capture/decode
+    // error, OffscreenCanvas/getImageData throwing) must never crash the canvas.
+    try {
+      const rect = ovr.rect;
+      if (!rect || !el) return;
+      const obr = el.getBoundingClientRect();
+      const sx = obr.width ? el.clientWidth / obr.width : 1;
+      const sy = obr.height ? el.clientHeight / obr.height : 1;
+      const lx = (clientX - obr.left) * sx;
+      const ly = (clientY - obr.top) * sy;
+      const nx = (lx - rect.x) / rect.w;
+      const ny = (ly - rect.y) / rect.h;
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return; // outside the image
+      const st = useDevelopStore.getState();
+      const bmp = await api.develop.captureFrame(st.previewParams || st.params);
+      const w = bmp.width;
+      const hgt = bmp.height;
+      if (!w || !hgt) return;
+      const oc = new OffscreenCanvas(w, hgt);
+      const ctx = oc.getContext("2d");
+      ctx.drawImage(bmp, 0, 0);
+      if (bmp.close) bmp.close();
+      const px = Math.max(0, Math.min(w - 1, Math.round(nx * w)));
+      const py = Math.max(0, Math.min(hgt - 1, Math.round(ny * hgt)));
+      const d = ctx.getImageData(px, py, 1, 1).data;
+      const [hh, ss] = rgb2hsl(d[0] / 255, d[1] / 255, d[2] / 255);
+      if (ss < 0.04) return; // near-neutral: no meaningful hue to select
+      addPointAt(hh, ss);
+    } catch (err) {
+      console.warn("[color2d-editor] colour pick failed:", err);
+    }
+  }
+
+  // Canvas overlay active only in pick mode. The global Ctrl/⌘/Space passthrough
+  // (core) forces this click-through while a gesture key is held, so pan/zoom keep
+  // working; here we just capture a plain click to sample.
+  function PickerOverlay() {
+    const { picking } = usePicker();
+    const ovr = api.develop.useDevelopOverlay();
+    const elRef = React.useRef(null);
+    React.useEffect(() => {
+      if (!picking) return;
+      const onKey = (e) => { if (e.key === "Escape") ui.set({ picking: false }); };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [picking]);
+    if (!picking) return null;
+    return h("div", {
+      ref: elRef,
+      onPointerDown: (e) => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey) return;
+        e.preventDefault();
+        void sampleColorAt(e.clientX, e.clientY, elRef.current, ovr);
+      },
+      style: {
+        position: "absolute", inset: 0, pointerEvents: "auto",
+        // The app's shared colour-picker cursor (honours any Custom Cursors theme),
+        // matching the built-in HSL picker. Guarded: api.cursors.resolve was added
+        // in a later core build, so fall back to crosshair on older ones (calling
+        // an undefined resolve here would throw mid-render and crash the canvas).
+        cursor: api.cursors && api.cursors.resolve ? api.cursors.resolve("pick") : "crosshair",
+      },
+    });
+  }
+
   // ---- panel ----
   function ColorEditorPanel() {
     const paramBag = useDevelopStore((s) => s.paramBag);
-    const [selected, setSelected] = React.useState(-1);
-    const [, force] = React.useReducer((n) => n + 1, 0);
+    const { selected, picking } = usePicker();
     const canvasRef = React.useRef(null);
     const wrapRef = React.useRef(null);
     const dragRef = React.useRef(null);
-    const SIZE = 188;
+    const SIZE = 188; // CSS size; the canvas backing store is SIZE × dpr for crispness
+    const dpr = Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 3);
+    const PIX = Math.round(SIZE * dpr);
 
     React.useEffect(() => {
-      if (canvasRef.current) drawWheel(canvasRef.current, SIZE);
-    }, []);
+      if (canvasRef.current) drawWheel(canvasRef.current, PIX);
+    }, [PIX]);
 
     const active = [];
     for (let i = 0; i < MAX_POINTS; i++) {
@@ -378,7 +517,7 @@ export function activate(api) {
         writeSlots({ [KA(free)]: [hue, sat, range, soft], [KB(free)]: [0, 0, 0, 1] });
         hit = free;
       }
-      setSelected(hit);
+      ui.set({ selected: hit });
       dragRef.current = hit;
     };
 
@@ -396,25 +535,47 @@ export function activate(api) {
       commit();
     };
 
+    // Double-click a point to remove it (no Remove button — matches the canvas
+    // "double-click to delete" convention).
+    const onWheelDoubleClick = (e) => {
+      const r = wrapRef.current.getBoundingClientRect();
+      for (const i of active) {
+        const p = posOf(i);
+        if (Math.hypot(e.clientX - r.left - p.x, e.clientY - r.top - p.y) <= 11) {
+          dragRef.current = null; // cancel any pending drag on the removed slot
+          writeSlots({ [KA(i)]: ZERO4, [KB(i)]: ZERO4 });
+          commit();
+          ui.set({ selected: -1 });
+          return;
+        }
+      }
+    };
+
     // Slider helpers for the selected point.
     const a = sel >= 0 ? readA(paramBag, sel) : ZERO4;
     const b = sel >= 0 ? readB(paramBag, sel) : ZERO4;
     const setA = (idx, val) => { const na = a.slice(); na[idx] = val; writeSlots({ [KA(sel)]: na }); };
     const setB = (idx, val) => { const nb = b.slice(); nb[idx] = val; writeSlots({ [KB(sel)]: nb }); };
-    const removeSel = () => { writeSlots({ [KA(sel)]: ZERO4, [KB(sel)]: ZERO4 }); commit(); setSelected(-1); force(); };
 
+    // Selected point reads boldly: bigger, a solid white ring, and a white glow
+    // halo over a dark outline so it stands out against any wheel colour.
     const markers = active.map((i) => {
       const p = posOf(i);
       const isSel = i === sel;
+      const sz = isSel ? 18 : 12;
       return h("div", {
         key: i,
         style: {
           position: "absolute", left: p.x + "px", top: p.y + "px",
-          width: "13px", height: "13px", marginLeft: "-7px", marginTop: "-7px",
-          borderRadius: "50%", boxSizing: "border-box",
-          border: isSel ? "2px solid #fff" : "2px solid rgba(255,255,255,0.7)",
-          boxShadow: "0 0 0 1.5px rgba(0,0,0,0.6)", background: "transparent",
+          width: sz + "px", height: sz + "px",
+          marginLeft: -sz / 2 + "px", marginTop: -sz / 2 + "px",
+          borderRadius: "50%", boxSizing: "border-box", background: "transparent",
+          border: isSel ? "3px solid #fff" : "2px solid rgba(255,255,255,0.85)",
+          boxShadow: isSel
+            ? "0 0 0 2px rgba(0,0,0,0.75), 0 0 9px 2px rgba(255,255,255,0.85)"
+            : "0 0 0 1.5px rgba(0,0,0,0.6)",
           pointerEvents: "none",
+          zIndex: isSel ? 2 : 1,
         },
       });
     });
@@ -429,13 +590,14 @@ export function activate(api) {
       onPointerMove: onWheelMove,
       onPointerUp: onWheelUp,
       onPointerCancel: onWheelUp,
+      onDoubleClick: onWheelDoubleClick,
       style: {
         position: "relative", width: SIZE + "px", height: SIZE + "px",
         margin: "2px auto 4px", borderRadius: "50%", cursor: "crosshair",
         touchAction: "none", boxShadow: "inset 0 0 0 1px var(--color-border)",
       },
     }, [
-      h("canvas", { key: "cv", ref: canvasRef, width: SIZE, height: SIZE,
+      h("canvas", { key: "cv", ref: canvasRef, width: PIX, height: PIX,
         style: { width: SIZE + "px", height: SIZE + "px", borderRadius: "50%", display: "block" } }),
       ...markers,
     ]);
@@ -445,11 +607,8 @@ export function activate(api) {
         alignItems: "center", marginTop: "4px" } }, [
         h("span", { key: "t", style: { fontSize: "11px", color: "var(--color-text-secondary)" } },
           `Point ${active.indexOf(sel) + 1} of ${active.length}`),
-        h("button", { key: "rm", onClick: removeSel,
-          style: { fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em",
-            padding: "1px 6px", borderRadius: "3px", cursor: "pointer",
-            border: "1px solid var(--color-border-subtle)", background: "transparent",
-            color: "var(--color-text-secondary)" } }, "Remove"),
+        h("span", { key: "hint", style: { fontSize: "9px", textTransform: "uppercase",
+          letterSpacing: "0.04em", color: "var(--color-text-muted)" } }, "Double-click to remove"),
       ]),
       label("Selection"),
       h(Slider, { key: "range", label: "Range", value: Math.round((a[2] / 1.5) * 100),
@@ -470,7 +629,28 @@ export function activate(api) {
     const countDiv = h("div", { style: { fontSize: "10px", color: "var(--color-text-muted)",
       textAlign: "center", marginBottom: "2px" } }, `${active.length}/${MAX_POINTS} points`);
 
-    return h(Panel, { title: "Color Editor" }, wheel, countDiv, controls);
+    const path = (d) => h("path", { d });
+    const eyedropper = h("svg", {
+      width: 11, height: 11, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+      strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true,
+    }, path("m2 22 1-1h3l9-9"), path("M3 21v-3l9-9"),
+       path("m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"));
+    const pickerBar = h("div", { style: { display: "flex", justifyContent: "center", marginBottom: "4px" } },
+      h("button", {
+        onClick: () => ui.set({ picking: !picking }),
+        "aria-pressed": picking,
+        title: "Pick a colour from the image to drop a selection point (Esc or click again to stop)",
+        style: {
+          display: "inline-flex", alignItems: "center", gap: "5px",
+          fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.06em",
+          padding: "2px 9px", borderRadius: "4px", cursor: "pointer",
+          border: "1px solid " + (picking ? "var(--color-accent)" : "var(--color-border-subtle)"),
+          background: picking ? "var(--color-accent)" : "transparent",
+          color: picking ? "#fff" : "var(--color-text-secondary)",
+        },
+      }, eyedropper, "Pick from image"));
+
+    return h(Panel, { title: "Color Editor" }, pickerBar, wheel, countDiv, controls);
   }
 
   api.registerPanel({
@@ -479,6 +659,14 @@ export function activate(api) {
     component: ColorEditorPanel,
     defaultDock: { module: "develop", direction: "right", order: 12, width: 280, height: 360 },
     onReset: clearAll,
+  });
+
+  // On-image eyedropper: a develop-canvas overlay, live only while Pick is armed.
+  api.registerSlot({
+    id: SLOT_ID,
+    slot: "develop-canvas-overlay",
+    component: PickerOverlay,
+    order: 60,
   });
 }
 

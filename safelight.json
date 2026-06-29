@@ -1,7 +1,7 @@
 {
   "id": "color2d-editor",
   "name": "Continuous 2D Color Editor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A continuous colour editor: drop points anywhere on a hue/saturation wheel and reshape that colour region's hue, saturation and luminance with a smooth 2D selection — no fixed 8-band buckets.",
   "author": "Anthony Reimche",
   "main": "index.js",

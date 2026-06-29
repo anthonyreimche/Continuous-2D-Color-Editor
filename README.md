@@ -8,12 +8,13 @@ Instead of eight preset hue buckets, you drop **points anywhere on a hue/saturat
 
 - Open the **Color Editor** panel in Develop (right rail).
 - **Click the wheel** to drop a colour point. Its angle is the hue, its distance from the centre is the saturation — so a point near the rim targets vivid colours, one near the centre targets muted ones.
-- **Drag a point** to retarget it; **click a point** to select it.
+- **Pick from image**: click the eyedropper button, then click anywhere on the photo to drop a point at exactly that colour. It stays armed for multiple picks — press Esc or click the button again to stop. Hold Ctrl/⌘ (or Space) to pan/zoom while picking.
+- **Drag a point** to retarget it; **click a point** to select it (the selected point is drawn larger with a bright halo). **Double-click a point** to remove it.
 - With a point selected, use the sliders:
   - **Range** — how wide a colour region the point covers.
   - **Smooth** — how soft the selection's edge is.
   - **Hue / Saturation / Luminance** — the adjustment applied to the selected region.
-- **Remove** drops the selected point. The panel header's reset clears them all.
+- **Double-click** a point on the wheel drops it. The panel header's reset clears them all.
 
 Up to 8 points per photo. Everything saves with the edit and undoes/redoes like any slider.
 
