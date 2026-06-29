@@ -143,6 +143,10 @@ const STAGE_GLSL = `c = c2d_apply(c);`;
 // same constants the core HSL mixer uses.
 const DEFAULT_LUM_STRENGTH = 60; // → gain 0.60
 const DEFAULT_NEUTRAL_PROTECT = 10; // → threshold 0.10
+// New-point selection defaults (also the Preferences defaults). These map the
+// same way the per-point Range/Smooth sliders do: range = v/100 * 1.5, soft = v/100.
+const DEFAULT_RANGE = 40; // → disc radius 0.60
+const DEFAULT_SMOOTH = 50; // → softness 0.50
 
 function buildStage(lumGain, neutral) {
   return {
@@ -249,6 +253,26 @@ export function activate(api) {
         max: 30,
         step: 1,
       },
+      {
+        key: "defaultRange",
+        label: "Default hue/sat range",
+        hint: "Selection size a freshly-dropped point starts with — how wide a hue/saturation region it covers. Tune to your editing style.",
+        type: "number",
+        default: DEFAULT_RANGE,
+        min: 5,
+        max: 100,
+        step: 5,
+      },
+      {
+        key: "defaultSmooth",
+        label: "Default smoothness",
+        hint: "How soft a freshly-dropped point's selection edge starts. Higher feathers the falloff more.",
+        type: "number",
+        default: DEFAULT_SMOOTH,
+        min: 2,
+        max: 100,
+        step: 1,
+      },
     ],
   });
 
@@ -348,7 +372,10 @@ export function activate(api) {
         for (let i = 0; i < MAX_POINTS; i++) if (readB(paramBag, i)[3] < 0.5) { free = i; break; }
         if (free === -1) return; // all slots used
         const { hue, sat } = pointToHS(e.clientX, e.clientY);
-        writeSlots({ [KA(free)]: [hue, sat, 0.6, 0.5], [KB(free)]: [0, 0, 0, 1] });
+        // New points adopt the user's preferred selection style (Preferences).
+        const range = (api.settings.get("defaultRange", DEFAULT_RANGE) / 100) * 1.5;
+        const soft = api.settings.get("defaultSmooth", DEFAULT_SMOOTH) / 100;
+        writeSlots({ [KA(free)]: [hue, sat, range, soft], [KB(free)]: [0, 0, 0, 1] });
         hit = free;
       }
       setSelected(hit);
