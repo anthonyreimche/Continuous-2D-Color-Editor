@@ -8,4 +8,5 @@
   "categories": ["Develop", "Color"],
   "keywords": ["color", "colour", "hue", "saturation", "luminance", "color editor", "2d", "color wheel"],
   "license": "MIT"
+  "minAppVersion": "2.4.3"
 }
