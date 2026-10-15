@@ -11,6 +11,9 @@
 // Colour science is deliberately identical to Safelight's built-in HSL mixer:
 // near-neutral pixels are protected, hue rotates in HSL, saturation is luminance-
 // anchored, and luminance is a hue-preserving gain.
+//
+// The loader reads only `activate` and `deactivate`. The other named exports (wheel
+// geometry and drawing, rgb2hsl) are there so index.test.mjs can import them.
 
 const STAGE_ID = "color2d-editor.color";
 const PANEL_ID = "color2d-editor.panel";
@@ -162,31 +165,35 @@ function buildStage(lumGain, neutral) {
 }
 
 // ---------------------------------------------------------------------------
-// Wheel rendering (HSV guide; the radius IS saturation, matching selection)
+// Wheel rendering (HSL guide; the radius IS saturation, matching selection)
 // ---------------------------------------------------------------------------
 
-function hsvToRgb(h, s, v) {
-  const i = Math.floor(h * 6);
-  const f = h * 6 - i;
-  const p = v * (1 - s);
-  const q = v * (1 - f * s);
-  const t = v * (1 - (1 - f) * s);
-  let r, g, b;
-  switch (((i % 6) + 6) % 6) {
-    case 0: r = v; g = t; b = p; break;
-    case 1: r = q; g = v; b = p; break;
-    case 2: r = p; g = v; b = t; break;
-    case 3: r = p; g = q; b = v; break;
-    case 4: r = t; g = p; b = v; break;
-    default: r = v; g = p; b = q; break;
-  }
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+// The stage selects on HSL saturation, which gives full chroma at lightness 0.5.
+// Every wheel position is drawn at that lightness so the colour under a point is
+// the colour it selects (HSV at V = 1 would read as HSL saturation 1 everywhere).
+const WHEEL_LIGHTNESS = 0.5;
+
+function hue2rgb(p, q, t) {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+
+// HSL (each 0..1) -> sRGB bytes; the same maths as the stage's c2d_hsl2rgb.
+function hslToRgb(h, s, l) {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const byte = (t) => Math.round(hue2rgb(p, q, t) * 255);
+  return [byte(h + 1 / 3), byte(h), byte(h - 1 / 3)];
 }
 
 // `size` is the canvas's device-pixel backing-store size (CSS size × dpr), so the
 // wheel stays crisp on HiDPI. The rim alpha feathers over ~1.5px centred on the
 // edge, so the circle reads as smooth/round instead of a jagged pixel staircase.
-function drawWheel(canvas, size) {
+export function drawWheel(canvas, size) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const img = ctx.createImageData(size, size);
@@ -202,7 +209,7 @@ function drawWheel(canvas, size) {
       if (rad > 1 + aa) { d[idx + 3] = 0; continue; }
       let ang = Math.atan2(-dy, dx);
       if (ang < 0) ang += TWO_PI;
-      const [rr, gg, bb] = hsvToRgb(ang / TWO_PI, Math.min(rad, 1), 1);
+      const [rr, gg, bb] = hslToRgb(ang / TWO_PI, Math.min(rad, 1), WHEEL_LIGHTNESS);
       const alpha = Math.min(1, Math.max(0, (1 + aa - rad) / (2 * aa)));
       d[idx] = rr; d[idx + 1] = gg; d[idx + 2] = bb;
       d[idx + 3] = Math.round(alpha * 255);
@@ -213,7 +220,7 @@ function drawWheel(canvas, size) {
 
 // sRGB (0..1) -> HSL. Matches the shader's rgb2hsl so a colour picked off the
 // image lands at the same wheel position the stage selects.
-function rgb2hsl(r, g, b) {
+export function rgb2hsl(r, g, b) {
   const mx = Math.max(r, g, b);
   const mn = Math.min(r, g, b);
   let h = 0;
@@ -228,6 +235,42 @@ function rgb2hsl(r, g, b) {
     h /= 6;
   }
   return [h, s, l];
+}
+
+// ---------------------------------------------------------------------------
+// Wheel geometry (pure, so the hit tests run without a DOM)
+// ---------------------------------------------------------------------------
+
+const HIT_RADIUS = 11; // layout px, a little past the selected marker's 9px radius
+
+// Where a point's marker sits in the wheel box, in layout pixels (the units the
+// markers' CSS left/top use). `a` is the point's A vec4: (hueTurns, sat, ...).
+export function wheelMarkerPos(a, size) {
+  const ang = a[0] * TWO_PI;
+  const r = Math.min(a[1], 1) * (size / 2);
+  return { x: size / 2 + r * Math.cos(ang), y: size / 2 - r * Math.sin(ang) };
+}
+
+// Pointer position in the wheel box's layout pixels. Interface scale puts CSS
+// `zoom` on <body>, so clientX and getBoundingClientRect() are zoomed visual
+// pixels while the markers stay in layout pixels: a raw `clientX - rect.left` is
+// off by the zoom. The rendered box size over its layout size is that zoom (1 at
+// 100%); pointToHS and the eyedropper already compensate the same way.
+export function wheelPointerPos(rect, size, clientX, clientY) {
+  return {
+    x: ((clientX - rect.left) * size) / rect.width,
+    y: ((clientY - rect.top) * size) / rect.height,
+  };
+}
+
+// Slot of the first point whose marker is under the pointer, or -1.
+export function hitWheelPoint(points, rect, size, clientX, clientY) {
+  const at = wheelPointerPos(rect, size, clientX, clientY);
+  for (const { slot, a } of points) {
+    const p = wheelMarkerPos(a, size);
+    if (Math.hypot(at.x - p.x, at.y - p.y) <= HIT_RADIUS) return slot;
+  }
+  return -1;
 }
 
 // Minimal shared store so the panel's Pick button and the canvas overlay agree on
@@ -475,13 +518,13 @@ export function activate(api) {
     }
     const sel = active.includes(selected) ? selected : (active.length ? active[0] : -1);
 
-    // Screen position (px, relative to the wheel box) of a point slot.
-    const posOf = (i) => {
-      const a = readA(paramBag, i);
-      const ang = a[0] * TWO_PI;
-      const r = Math.min(a[1], 1) * (SIZE / 2);
-      return { x: SIZE / 2 + r * Math.cos(ang), y: SIZE / 2 - r * Math.sin(ang) };
-    };
+    // Layout position (px, relative to the wheel box) of a point slot.
+    const posOf = (i) => wheelMarkerPos(readA(paramBag, i), SIZE);
+
+    // Slot of the point under the pointer, or -1.
+    const pointAt = (e) => hitWheelPoint(
+      active.map((i) => ({ slot: i, a: readA(paramBag, i) })),
+      wrapRef.current.getBoundingClientRect(), SIZE, e.clientX, e.clientY);
 
     // Pointer -> (hueTurns, sat). getBoundingClientRect (not offsetX/Y) so it
     // survives Windows display scaling and the interface-scale zoom.
@@ -499,12 +542,7 @@ export function activate(api) {
       e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
       // Hit-test existing points first.
-      let hit = -1;
-      for (const i of active) {
-        const p = posOf(i);
-        if (Math.hypot(e.clientX - wrapRef.current.getBoundingClientRect().left - p.x,
-                       e.clientY - wrapRef.current.getBoundingClientRect().top - p.y) <= 11) { hit = i; break; }
-      }
+      let hit = pointAt(e);
       if (hit === -1) {
         // Add a new point in the first free slot.
         let free = -1;
@@ -538,17 +576,12 @@ export function activate(api) {
     // Double-click a point to remove it (no Remove button — matches the canvas
     // "double-click to delete" convention).
     const onWheelDoubleClick = (e) => {
-      const r = wrapRef.current.getBoundingClientRect();
-      for (const i of active) {
-        const p = posOf(i);
-        if (Math.hypot(e.clientX - r.left - p.x, e.clientY - r.top - p.y) <= 11) {
-          dragRef.current = null; // cancel any pending drag on the removed slot
-          writeSlots({ [KA(i)]: ZERO4, [KB(i)]: ZERO4 });
-          commit();
-          ui.set({ selected: -1 });
-          return;
-        }
-      }
+      const i = pointAt(e);
+      if (i === -1) return;
+      dragRef.current = null; // cancel any pending drag on the removed slot
+      writeSlots({ [KA(i)]: ZERO4, [KB(i)]: ZERO4 });
+      commit();
+      ui.set({ selected: -1 });
     };
 
     // Slider helpers for the selected point.

@@ -2,7 +2,7 @@
 
 A continuous colour editor for [Safelight](https://github.com/anthonyreimche/Safelight) — the Capture One–style alternative to a fixed 8‑band HSL mixer.
 
-Instead of eight preset hue buckets, you drop **points anywhere on a hue/saturation wheel**. Each point selects a smooth *2D* region of colour — a disc on the chromaticity plane, with its own size and softness — and reshapes that region's **hue, saturation and luminance**. Overlapping points blend. It's the right tool when the colour you want to push sits between the stock bands, or when you want to isolate "the saturated blues" without touching the pale ones.
+Instead of eight preset hue buckets, you drop **points anywhere on a hue/saturation wheel**. Each point selects a smooth *2D* region of colour — a disc on the chromaticity plane, with its own size and softness — and reshapes that region's **hue, saturation and luminance**. Where points overlap, their adjustments add up. It's the right tool when the colour you want to push sits between the stock bands, or when you want to isolate "the saturated blues" without touching the pale ones.
 
 ## Using it
 
@@ -14,7 +14,7 @@ Instead of eight preset hue buckets, you drop **points anywhere on a hue/saturat
   - **Range** — how wide a colour region the point covers.
   - **Smooth** — how soft the selection's edge is.
   - **Hue / Saturation / Luminance** — the adjustment applied to the selected region.
-- **Double-click** a point on the wheel drops it. The panel header's reset clears them all.
+- The panel header's reset clears all points.
 
 Up to 8 points per photo. Everything saves with the edit and undoes/redoes like any slider.
 

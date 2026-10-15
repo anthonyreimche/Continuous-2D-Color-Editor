@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Dev-only. The installer reads just safelight.json and its main bundle, so keep
+# these out of the GitHub tarballs it downloads.
+index.test.mjs export-ignore
+package.json export-ignore
