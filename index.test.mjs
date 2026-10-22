@@ -281,3 +281,27 @@ test("activate registers the stage, settings, panel and overlay slot the app exp
   assert.equal(typeof deactivate, "function");
   editor.close();
 });
+
+// On process version 2 the host clips a display stage that declares no space to
+// [0, 1] ahead of its block, outside its own gate, for as long as it is
+// registered: every photo, points or not. The stage declares the display's own
+// space and clips only the colours a point actually moves.
+test("the stage declares the display's own space, so the host adds no clip outside the gate", () => {
+  const editor = openEditor();
+  assert.deepEqual(editor.registered.stage.space, { encoding: "perceptual" });
+  editor.close();
+});
+
+test("colours no point moves pass through before any clip", () => {
+  const editor = openEditor();
+  const { helpers } = editor.registered.stage;
+  const apply = helpers.slice(helpers.indexOf("vec3 c2d_apply(vec3 col)"));
+  const noPoints = apply.indexOf("if (uCPCount < 1) return col;");
+  const firstClip = apply.indexOf("clamp(col, 0.0, 1.0)");
+  const untouched = apply.indexOf("if (acc == vec3(0.0)) return col;");
+  const roundTrip = apply.indexOf("c2d_hsl2rgb(hsl)");
+  assert.ok(noPoints > 0 && noPoints < firstClip, "no points: pass through before clipping");
+  assert.ok(untouched > apply.indexOf("c2d_pt(uCP7A, uCP7B, pPix, acc);"), "the zero-weight guard follows the point loop");
+  assert.ok(untouched > 0 && untouched < roundTrip, "zero weight: pass through before the HSL round trip");
+  editor.close();
+});

@@ -124,6 +124,7 @@ vec3 c2d_apply(vec3 col) {
   c2d_pt(uCP5A, uCP5B, pPix, acc);
   c2d_pt(uCP6A, uCP6B, pPix, acc);
   c2d_pt(uCP7A, uCP7B, pPix, acc);
+  if (acc == vec3(0.0)) return col; // no point moves this colour: keep its range
 
   float hueShift = acc.x * chromaW;
   float satAdj   = acc.y * chromaW;
@@ -152,12 +153,15 @@ const DEFAULT_NEUTRAL_PROTECT = 10; // → threshold 0.10
 const DEFAULT_RANGE = 40; // → disc radius 0.60
 const DEFAULT_SMOOTH = 50; // → softness 0.50
 
-function buildStage(lumGain, neutral) {
+export function buildStage(lumGain, neutral) {
   return {
     id: STAGE_ID,
     name: "2D Color Editor",
     phase: "display-adjust",
     priority: 10, // colour-shape first, before creative effects (vignette/grain)
+    // The display's own space: the host adds no clip ahead of the stage, so
+    // colours no point moves keep their range; c2d_apply clips the rest.
+    space: { encoding: "perceptual" },
     glsl: STAGE_GLSL,
     helpers: buildHelpers(neutral, lumGain),
     uniforms: buildUniforms(),
