@@ -156,7 +156,7 @@ const DEFAULT_SMOOTH = 50; // → softness 0.50
 export function buildStage(lumGain, neutral) {
   return {
     id: STAGE_ID,
-    name: "2D Color Editor",
+    name: "2D Colour Editor",
     phase: "display-adjust",
     priority: 10, // colour-shape first, before creative effects (vignette/grain)
     // The display's own space: the host adds no clip ahead of the stage, so
@@ -203,7 +203,7 @@ export function drawWheel(canvas, size) {
   const img = ctx.createImageData(size, size);
   const d = img.data;
   const r0 = size / 2;
-  const aa = 1.5 / r0; // anti-aliased rim width, in normalised-radius units
+  const aa = 1.5 / r0; // anti-aliased rim width, in normalized-radius units
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const dx = (x - r0 + 0.5) / r0;
@@ -312,7 +312,7 @@ export function activate(api) {
   api.registerProcessingStage(buildStage(cur.lumGain, cur.neutral));
 
   api.registerSettings({
-    title: "2D Color Editor",
+    title: "2D Colour Editor",
     order: 61, // just after the built-in HSL section
     keywords: ["color", "colour", "2d", "luminance", "neutral", "protect"],
     fields: [
@@ -389,14 +389,14 @@ export function activate(api) {
     useDevelopStore.getState().setDynParams({ ...patch, [KCOUNT]: count });
   }
 
-  const commit = () => void useDevelopStore.getState().commitEdit("2D Color Editor");
+  const commit = () => void useDevelopStore.getState().commitEdit("2D Colour Editor");
 
   function clearAll() {
     const patch = {};
     for (let i = 0; i < MAX_POINTS; i++) { patch[KA(i)] = ZERO4; patch[KB(i)] = ZERO4; }
     patch[KCOUNT] = 0;
     useDevelopStore.getState().setDynParams(patch);
-    void useDevelopStore.getState().commitEdit("Reset Color Editor");
+    void useDevelopStore.getState().commitEdit("Reset Colour Editor");
   }
 
   // ---- shared UI state (picker mode + selected point) ----
@@ -687,12 +687,12 @@ export function activate(api) {
         },
       }, eyedropper, "Pick from image"));
 
-    return h(Panel, { title: "Color Editor" }, pickerBar, wheel, countDiv, controls);
+    return h(Panel, { title: "Colour Editor" }, pickerBar, wheel, countDiv, controls);
   }
 
   api.registerPanel({
     id: PANEL_ID,
-    title: "Color Editor",
+    title: "Colour Editor",
     component: ColorEditorPanel,
     defaultDock: { module: "develop", direction: "right", order: 12, width: 280, height: 360 },
     onReset: clearAll,

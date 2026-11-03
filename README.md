@@ -6,7 +6,7 @@ Instead of eight preset hue buckets, you drop **points anywhere on a hue/saturat
 
 ## Using it
 
-- Open the **Color Editor** panel in Develop (right rail).
+- Open the **Colour Editor** panel in Develop (right rail).
 - **Click the wheel** to drop a colour point. Its angle is the hue, its distance from the centre is the saturation — so a point near the rim targets vivid colours, one near the centre targets muted ones.
 - **Pick from image**: click the eyedropper button, then click anywhere on the photo to drop a point at exactly that colour. It stays armed for multiple picks — press Esc or click the button again to stop. Hold Ctrl/⌘ (or Space) to pan/zoom while picking.
 - **Drag a point** to retarget it; **click a point** to select it (the selected point is drawn larger with a bright halo). **Double-click a point** to remove it.
@@ -29,6 +29,6 @@ This extension is a single self‑contained ESM bundle — no build step.
 - **From the store:** publish this repo to GitHub, tag it with the `safelight-extension` topic, and install it from Safelight's Extensions window.
 - **Locally (for development):** enable **Developer Tools** in the Extensions manager and point its dev folder at this repository; Safelight will load `index.js` directly.
 
-## License
+## Licence
 
 MIT © 2026 Anthony Reimche
