@@ -1,4 +1,4 @@
-# Continuous 2D Color Editor
+# Continuous 2D Colour Editor
 
 A continuous colour editor for [Safelight](https://github.com/anthonyreimche/Safelight) — the Capture One–style alternative to a fixed 8‑band HSL mixer.
 

@@ -1,4 +1,4 @@
-// Tests for the Continuous 2D Color Editor's colour wheel. Plain Node, no
+// Tests for the Continuous 2D Colour Editor's colour wheel. Plain Node, no
 // dependencies:
 //
 //   node --test        (npm test runs the same thing)

@@ -1,4 +1,4 @@
-// Continuous 2D Color Editor for Safelight
+// Continuous 2D Colour Editor for Safelight
 // Copyright (c) 2026 Anthony Reimche. MIT License.
 //
 // A Capture One-style continuous colour editor. Instead of eight fixed hue
