@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   activate,
+  canvasPointToUv,
   deactivate,
   drawWheel,
   hitWheelPoint,
@@ -162,6 +163,11 @@ function* walk(node) {
 }
 const isElement = (n) => n !== null && typeof n === "object" && !Array.isArray(n);
 
+const TOKENS = {
+  accent: "T-accent", border: "T-border", borderSubtle: "T-subtle", textMuted: "T-muted",
+  textSecondary: "T-secondary", white: "T-white",
+};
+
 // Activate the extension against the stand-in API. `saved` lists [hueTurns, sat]
 // points already in the photo's param bag.
 function openEditor(saved = []) {
@@ -178,14 +184,22 @@ function openEditor(saved = []) {
     commitEdit: async (label) => { commits.push(label); },
   };
   const registered = {};
+  const pickDrags = [];
+  const effects = [];
+  let pickDragHeld = false;
   activate({
     react: {
       createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
       useRef: (current) => ({ current }),
       useState: (value) => [value, () => {}],
-      useEffect: () => {},
+      useEffect: (effect) => { effects.push(effect); },
     },
-    components: { Panel: "Panel", Slider: "Slider" },
+    develop: {
+      setPickDrag: (tool) => { pickDrags.push(tool); },
+      usePickDragHeld: () => pickDragHeld,
+    },
+    components: { Panel: "Panel", Slider: "Slider", PickerIcon: "PickerIcon" },
+    ui: { Button: "Button", tokens: TOKENS },
     stores: { useDevelopStore: Object.assign((select) => select(state), { getState: () => state }) },
     settings: { get: (_key, fallback) => fallback, onChange: () => () => {} },
     registerProcessingStage: (stage) => { registered.stage = stage; },
@@ -216,7 +230,24 @@ function openEditor(saved = []) {
     };
   }
 
-  return { bag, writes, commits, registered, render, close: () => deactivate() };
+  // The slot's component, rendered once: the effects it asks for, run.
+  function renderWatch() {
+    effects.length = 0;
+    registered.slot.component();
+    for (const effect of effects.splice(0)) effect();
+  }
+
+  // The Pick button, pressed.
+  const pressPick = () => {
+    const button = [...walk(registered.panel.component())].filter(isElement).find((n) => n.type === "Button");
+    button.props.onClick();
+  };
+
+  return {
+    bag, writes, commits, registered, render, pickDrags, pressPick, renderWatch,
+    holdPickDrag: (held) => { pickDragHeld = held; },
+    close: () => deactivate(),
+  };
 }
 
 const SAVED = [[0.0, 0.9], [0.25, 0.5], [0.6, 0.8]];
@@ -268,7 +299,7 @@ for (const zoom of ZOOMS) {
   });
 }
 
-test("activate registers the stage, settings, panel and overlay slot the app expects", () => {
+test("activate registers the stage, settings, panel and picker watch slot the app expects", () => {
   const editor = openEditor();
   const { stage, settings, panel, slot } = editor.registered;
   assert.equal(stage.id, "color2d-editor.color");
@@ -303,5 +334,75 @@ test("colours no point moves pass through before any clip", () => {
   assert.ok(noPoints > 0 && noPoints < firstClip, "no points: pass through before clipping");
   assert.ok(untouched > apply.indexOf("c2d_pt(uCP7A, uCP7B, pPix, acc);"), "the zero-weight guard follows the point loop");
   assert.ok(untouched > 0 && untouched < roundTrip, "zero weight: pass through before the HSL round trip");
+  editor.close();
+});
+
+// ---------------------------------------------------------------------------
+// The on-image eyedropper: core's pick-drag tool
+// ---------------------------------------------------------------------------
+
+test("canvasPointToUv maps a canvas point on the captured frame to 0..1", () => {
+  assert.deepEqual(canvasPointToUv({ x: 400, y: 150 }, 800, 600), { x: 0.5, y: 0.25 });
+  assert.equal(canvasPointToUv({ x: 900, y: 150 }, 800, 600), null);
+  assert.equal(canvasPointToUv({ x: -1, y: 150 }, 800, 600), null);
+  assert.equal(canvasPointToUv({ x: 0, y: 0 }, 1, 1), null);
+});
+
+test("Pick holds the canvas's pick-drag tool and lets it go when pressed again", () => {
+  const editor = openEditor();
+  editor.pressPick();
+  editor.pressPick();
+  assert.equal(editor.pickDrags.length, 2);
+  assert.equal(typeof editor.pickDrags[0].onPress, "function");
+  assert.equal(editor.pickDrags[1], null);
+  editor.close();
+});
+
+test("the picker ends when core lets the pick-drag tool go, and not while it holds it", () => {
+  const editor = openEditor();
+  editor.pressPick();
+  editor.holdPickDrag(true);
+  editor.renderWatch();
+  assert.equal(editor.pickDrags.length, 1);
+  editor.holdPickDrag(false);
+  editor.renderWatch();
+  assert.equal(editor.pickDrags.at(-1), null);
+  editor.close();
+});
+
+test("the picker keeps no key listeners of its own", () => {
+  const listened = [];
+  const real = globalThis.window;
+  globalThis.window = { addEventListener: (type) => listened.push(type) };
+  try {
+    const editor = openEditor();
+    editor.pressPick();
+    editor.holdPickDrag(true);
+    editor.renderWatch();
+    editor.close();
+  } finally {
+    globalThis.window = real;
+  }
+  assert.deepEqual(listened, []);
+});
+
+test("Pick is the ui kit's Button over core's eyedropper, not a hand-drawn one", () => {
+  const editor = openEditor();
+  const tree = [...walk(editor.registered.panel.component())].filter(isElement);
+  const pick = tree.find((n) => n.type === "Button");
+  assert.equal(pick.props.active, false);
+  assert.ok([...walk(pick.children)].some((n) => isElement(n) && n.type === "PickerIcon"));
+  assert.deepEqual(tree.filter((n) => n.type === "svg" || n.type === "button"), []);
+  editor.pressPick();
+  editor.close();
+});
+
+test("the panel takes its colours from the ui tokens and keeps no hint line", () => {
+  const editor = openEditor(SAVED);
+  const tree = [...walk(editor.registered.panel.component())].filter(isElement);
+  assert.deepEqual(tree.filter((n) => JSON.stringify(n.props.style ?? {}).includes("var(--")), []);
+  assert.ok(tree.some((n) => n.props.style?.color === "T-muted"));
+  assert.ok(![...walk(tree)].includes("Double-click to remove"));
+  assert.ok(tree.some((n) => /Double-click/.test(n.props.title ?? "")));
   editor.close();
 });
